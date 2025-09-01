@@ -131,6 +131,20 @@ defmodule Electric.Postgres.Inspector.EtsInspector do
           {:error, "EtsInspector process #{inspect(server)} not alive"}
         end
 
+      {:via, Registry, {registry_name, key}} = server ->
+        case Registry.whereis_name(server) do
+          :undefined ->
+            {:error,
+             "EtsInspector process not found in registry #{inspect(registry_name)} with key #{inspect(key)}. Make sure the Electric StackSupervisor is started."}
+
+          pid when is_pid(pid) ->
+            if Process.alive?(pid) do
+              :ok
+            else
+              {:error, "EtsInspector process via registry not alive"}
+            end
+        end
+
       server ->
         {:error, "Invalid server specification: #{inspect(server)}"}
     end
