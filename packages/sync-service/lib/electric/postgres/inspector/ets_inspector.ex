@@ -46,8 +46,14 @@ defmodule Electric.Postgres.Inspector.EtsInspector do
   @spec load_relation_oid(Electric.relation(), opts :: term()) ::
           {:ok, Electric.oid_relation()} | :table_not_found | {:error, term()}
   def load_relation_oid(relation, opts) when is_relation(relation) do
-    with :not_in_cache <- fetch_normalized_relation_from_ets(relation, opts) do
-      GenServer.call(opts[:server], {:load_relation_oid, relation}, :infinity)
+    case ensure_inspector_running(opts) do
+      :ok ->
+        with :not_in_cache <- fetch_normalized_relation_from_ets(relation, opts) do
+          GenServer.call(opts[:server], {:load_relation_oid, relation}, :infinity)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -55,8 +61,14 @@ defmodule Electric.Postgres.Inspector.EtsInspector do
   @spec load_relation_info(Electric.relation_id(), opts :: term()) ::
           {:ok, Inspector.relation_info()} | :table_not_found | {:error, term()}
   def load_relation_info(oid, opts) when is_relation_id(oid) do
-    with :not_in_cache <- fetch_relation_info_from_ets(oid, opts) do
-      GenServer.call(opts[:server], {:load_relation_info, oid}, :infinity)
+    case ensure_inspector_running(opts) do
+      :ok ->
+        with :not_in_cache <- fetch_relation_info_from_ets(oid, opts) do
+          GenServer.call(opts[:server], {:load_relation_info, oid}, :infinity)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -64,8 +76,14 @@ defmodule Electric.Postgres.Inspector.EtsInspector do
   @spec load_column_info(Electric.relation_id(), opts :: term()) ::
           {:ok, [Inspector.column_info()]} | :table_not_found | {:error, term()}
   def load_column_info(oid, opts) when is_relation_id(oid) do
-    with :not_in_cache <- fetch_column_info_from_ets(oid, opts) do
-      GenServer.call(opts[:server], {:load_column_info, oid}, :infinity)
+    case ensure_inspector_running(opts) do
+      :ok ->
+        with :not_in_cache <- fetch_column_info_from_ets(oid, opts) do
+          GenServer.call(opts[:server], {:load_column_info, oid}, :infinity)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -83,6 +101,61 @@ defmodule Electric.Postgres.Inspector.EtsInspector do
   end
 
   ## Internal API
+
+  # Helper function to ensure the inspector process is running
+  defp ensure_inspector_running(opts) do
+    case opts[:server] do
+      nil ->
+        {:error, "No server specified in opts"}
+
+      server when is_atom(server) ->
+        case GenServer.whereis(server) do
+          nil ->
+            # Try to start the inspector if it's not running
+            case try_start_inspector(opts) do
+              {:ok, _pid} ->
+                :ok
+
+              {:error, reason} ->
+                {:error, "EtsInspector process #{inspect(server)} not running: #{reason}"}
+            end
+
+          _pid ->
+            :ok
+        end
+
+      server when is_pid(server) ->
+        if Process.alive?(server) do
+          :ok
+        else
+          {:error, "EtsInspector process #{inspect(server)} not alive"}
+        end
+
+      server ->
+        {:error, "Invalid server specification: #{inspect(server)}"}
+    end
+  end
+
+  # Try to start the inspector process if it's not running
+  defp try_start_inspector(opts) do
+    case opts do
+      %{stack_id: stack_id, pool: pool, persistent_kv: persistent_kv} when is_binary(stack_id) ->
+        start_link(stack_id: stack_id, pool: pool, persistent_kv: persistent_kv)
+
+      opts when is_list(opts) ->
+        case {opts[:stack_id], opts[:pool], opts[:persistent_kv]} do
+          {stack_id, pool, persistent_kv}
+          when is_binary(stack_id) and not is_nil(pool) and not is_nil(persistent_kv) ->
+            start_link(stack_id: stack_id, pool: pool, persistent_kv: persistent_kv)
+
+          _ ->
+            {:error, "Missing required opts: stack_id, pool, persistent_kv"}
+        end
+
+      _ ->
+        {:error, "Invalid opts format"}
+    end
+  end
 
   @impl GenServer
   def init(opts) do
